@@ -25,22 +25,7 @@ pub fn do_work(something: &mut Something) {
     (something.closure)(something.value);
 }
 
-#[cfg(test)]
-fn test_target(v: u32) {
-    println!("Got: {}", v);
-}
-
-#[test]
-fn test_with_static() {
-    let mut ctx = Something{closure: &mut test_target, value: 5};
-    do_work(&mut ctx);
-    ctx.value = 42;
-    do_work(&mut ctx);
-    // Can't assert :/
-}
-
-#[test]
-fn test_with_closure() {
+fn main() {
     let mut target: Vec<u32> = vec![];
     {
         let mut storer = |val: u32| { target.push(val) };
