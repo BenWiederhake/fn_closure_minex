@@ -1,4 +1,4 @@
-// implicants – Enumerate (prime) implicants of an arbitrary function
+// fn_closure_minex – minimal example for something
 // Copyright (C) 2017  Ben Wiederhake
 //
 // This program is free software: you can redistribute it and/or modify
@@ -14,258 +14,44 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-extern crate subint;
-mod bits;
-mod masked_count;
+type LovelyFn = FnMut(u32);
 
-use std::collections::HashMap;
-use bits::Bitset;
-
-type ChunkMap = HashMap<u32, Bitset>;
-type SampleFn = fn(u32) -> bool;
-type ReportFn = fn(u32, u32, bool);
-
-struct Context {
-    sampling_fn: SampleFn,
-    report_fn: ReportFn,
-    arity: u32,
+pub struct Something<'a> {
+    closure: &'a mut LovelyFn,
+    value: u32,
 }
 
-impl Context {
-    fn new_chunk(&self) -> Bitset {
-        Bitset::of(self.arity)
-    }
-
-    fn insert_chunk<'a>(&self, into: &'a mut ChunkMap, at: u32) -> &'a mut Bitset {
-        into.entry(at).or_insert(self.new_chunk())
-    }
+pub fn do_work(something: &mut Something) {
+    (something.closure)(something.value);
 }
 
-fn build_rank_0(ctx: &Context, into: &mut ChunkMap) {
-    assert!(ctx.arity < 32, "Can only handle at most 31 bits, but tried {} bits", ctx.arity);
-    assert_eq!(into.len(), 0);
+#[cfg(test)]
+fn test_target(v: u32) {
+    println!("Got: {}", v);
+}
 
-    let is_any;
+#[test]
+fn test_with_static() {
+    let mut ctx = Something{closure: &mut test_target, value: 5};
+    do_work(&mut ctx);
+    ctx.value = 42;
+    do_work(&mut ctx);
+    // Can't assert :/
+}
 
-    // Need to end lifetime of 'chunk' before we remove it from the container,
-    // so wrap it into a separate scope.
+#[test]
+fn test_with_closure() {
+    let mut target: Vec<u32> = vec![];
     {
-    let chunk: &mut Bitset = ctx.insert_chunk(into, 0);
-    // I could probably extend that to include 32, but then this would overflow on x86:
-    for i in 0..(1 << ctx.arity) {
-        if (ctx.sampling_fn)(i) {
-            chunk.set(i);
-        }
-    }
-    is_any = chunk.is_any();
-    }
-
-    if !is_any {
-        into.remove(&0);
-    }
-}
-
-#[cfg(test)]
-fn test_sample_false(_: u32) -> bool { false }
-#[cfg(test)]
-fn test_sample_true(_: u32) -> bool { true }
-#[cfg(test)]
-fn test_sample_mod3(v: u32) -> bool { (v % 3) == 0 }
-#[cfg(test)]
-fn test_sample_mux(v: u32) -> bool { 1 == 1 & (v >> (1 + (v & 1))) }
-#[cfg(test)]
-fn test_sample_fail(_: u32) -> bool { panic!("But there is nothing to sample?!"); }
-
-#[cfg(test)]
-fn test_report_fail(_: u32, _: u32, _: bool) {
-    panic!("But there is nothing to report?!");
-}
-
-#[test]
-fn test_build_0() {
-    // Prepare
-    let ctx = Context{
-        sampling_fn: test_sample_mod3,
-        report_fn: test_report_fail,
-        arity: 3,
-    };
-    let mut chunks = HashMap::new();
-
-    // Call under test
-    build_rank_0(&ctx, &mut chunks);
-
-    // Check
-    assert_eq!(1, chunks.len());
-    let c: &Bitset = &chunks[&0];
-    assert_eq!(true, c.is(0));
-    assert_eq!(false, c.is(1));
-    assert_eq!(false, c.is(2));
-    assert_eq!(true, c.is(3));
-    assert_eq!(false, c.is(4));
-    assert_eq!(false, c.is(5));
-    assert_eq!(true, c.is(6));
-    assert_eq!(false, c.is(7));
-}
-
-#[test]
-fn test_build_0_full() {
-    // Prepare
-    let ctx = Context{
-        sampling_fn: test_sample_true,
-        report_fn: test_report_fail,
-        arity: 3,
-    };
-    let mut chunks = HashMap::new();
-
-    // Call under test
-    build_rank_0(&ctx, &mut chunks);
-
-    // Check
-    assert_eq!(1, chunks.len());
-    let c: &Bitset = &chunks[&0];
-    assert_eq!(true, c.is(0));
-    assert_eq!(true, c.is(1));
-    assert_eq!(true, c.is(2));
-    assert_eq!(true, c.is(3));
-    assert_eq!(true, c.is(4));
-    assert_eq!(true, c.is(5));
-    assert_eq!(true, c.is(6));
-    assert_eq!(true, c.is(7));
-}
-
-#[test]
-fn test_build_0_empty() {
-    // Prepare
-    let ctx = Context{
-        sampling_fn: test_sample_false,
-        report_fn: test_report_fail,
-        arity: 3,
-    };
-    let mut chunks = HashMap::new();
-
-    // Call under test
-    build_rank_0(&ctx, &mut chunks);
-
-    // Check
-    assert_eq!(0, chunks.len());
-}
-
-fn build_rank_n(ctx: &Context, rank: u32, into: &mut ChunkMap, from: &ChunkMap) {
-    assert!(into.is_empty());
-
-    /* Quick path in case there's nothing to do *at all*. */
-    if from.len() == 0 {
-        return;
+        let mut storer = |val: u32| { target.push(val) };
+        let mut ctx = Something{
+            closure: &mut storer,
+            value: 123,
+        };
+        do_work(&mut ctx);
+        ctx.value = 234;
+        do_work(&mut ctx);
     }
 
-    let arity_mask = subint::of(ctx.arity);
-    // For each destination chunk:
-    for mask_m in arity_mask.permute(rank) {
-        // Pick a subchunk from which we're going to read
-        let overmask_m = mask_m & (mask_m-1);
-        let subchunk: Option<&Bitset> = from.get(&overmask_m);
-        if subchunk.is_none() {
-            /* This chunk would be blank anyway. */
-            continue;
-        }
-        let subchunk = subchunk.unwrap();
-
-        let is_any;
-        // Need to end lifetime of 'chunk' before we remove it from the container,
-        // so wrap it into a separate scope.
-        {
-        let chunk: &mut Bitset = ctx.insert_chunk(into, mask_m);
-        let collapsed_dim = mask_m & !overmask_m;
-        assert_eq!(1, collapsed_dim.count_ones(), "{}", collapsed_dim);
-        // For each face:
-        for i in masked_count::up(arity_mask.invert(mask_m)) {
-            // If both "sides" of the current "face" are implicants,
-            // then the current "face" is an implicant, too.
-            if subchunk.is(i) && subchunk.is(i | collapsed_dim) {
-                chunk.set(i);
-            }
-        }
-        is_any = chunk.is_any();
-        }
-
-        if !is_any {
-            // None were set, so prune it for the next layer.
-            into.remove(&mask_m);
-        }
-    }
-}
-
-#[test]
-fn test_build_n() {
-    // Prepare
-    let ctx = Context{
-        sampling_fn: test_sample_mux,
-        report_fn: test_report_fail,
-        arity: 3,
-    };
-    let mut chunks_from = HashMap::new();
-    build_rank_0(&ctx, &mut chunks_from);
-    assert_eq!(1, chunks_from.len());
-    let chunks_from = chunks_from;
-    let mut chunks_into = HashMap::new();
-
-    // Call under test
-    build_rank_n(&ctx, 1, &mut chunks_into, &chunks_from);
-
-    // Check
-    assert_eq!(3, chunks_into.len());
-    let c: &Bitset = &chunks_into[&0b001];  // XXM
-    assert_eq!(false, c.is(0b000));
-    assert_eq!(false, c.is(0b010));
-    assert_eq!(false, c.is(0b100));
-    assert_eq!(true, c.is(0b110));
-    let c: &Bitset = &chunks_into[&0b010];  // XMX
-    assert_eq!(false, c.is(0b000));
-    assert_eq!(false, c.is(0b001));
-    assert_eq!(false, c.is(0b100));
-    assert_eq!(true, c.is(0b101));
-    let c: &Bitset = &chunks_into[&0b100];  // MXX
-    assert_eq!(false, c.is(0b000));
-    assert_eq!(false, c.is(0b001));
-    assert_eq!(true, c.is(0b010));
-    assert_eq!(false, c.is(0b011));
-}
-
-#[test]
-fn test_build_n_empty() {
-    // Prepare
-    let ctx = Context{
-        sampling_fn: test_sample_fail,
-        report_fn: test_report_fail,
-        arity: 3,
-    };
-    let mut chunks_from = HashMap::new();
-    ctx.insert_chunk(&mut chunks_from, 0).set(0);
-    assert_eq!(1, chunks_from.len());
-    let chunks_from = chunks_from;
-    let mut chunks_into = HashMap::new();
-
-    // Call under test
-    build_rank_n(&ctx, 1, &mut chunks_into, &chunks_from);
-
-    // Check
-    assert_eq!(0, chunks_into.len());
-}
-
-#[test]
-fn test_build_n_empty_imm() {
-    // Prepare
-    let ctx = Context{
-        sampling_fn: test_sample_fail,
-        report_fn: test_report_fail,
-        arity: 3,
-    };
-    let chunks_from = HashMap::new();
-    let mut chunks_into = HashMap::new();
-
-    // Call under test
-    build_rank_n(&ctx, 1, &mut chunks_into, &chunks_from);
-
-    // Check
-    assert_eq!(0, chunks_into.len());
+    assert_eq!(vec![123, 234], target);
 }
